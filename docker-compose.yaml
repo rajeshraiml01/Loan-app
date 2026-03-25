@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: loan-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/workspace/src:ro
+      - ./models:/workspace/models:ro
+      - ./artifacts:/workspace/artifacts:ro
+      - ./data:/workspace/data:ro
+    environment:
+      MODEL_PATH: /workspace/models/best_model.joblib
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  ui:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+    container_name: loan-ui
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./ui:/app:ro
+    environment:
+      API_URL: http://api:8000/predict
+    depends_on:
+      - api
+    restart: unless-stopped
+
+networks:
+  default:
+    name: loan-network
