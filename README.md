@@ -132,6 +132,7 @@ docker-compose down
 API includes a health check endpoint (`/health`) that Docker monitors to confirm the API is ready.
 
 ## Project Structure
+```
 Loan-app
 ├── api
 │   ├── Dockerfile
@@ -188,3 +189,4 @@ Loan-app
 │   ├── app.py
 │   └── Dockerfile
 ├── utils
+```
