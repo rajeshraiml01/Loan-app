@@ -1,0 +1,12 @@
+subscription_id   = "00000000-0000-0000-0000-000000000000"
+prefix            = "loanapp"
+location          = "eastus"
+node_count        = 2
+node_vm_size      = "Standard_D2s_v5"
+kubernetes_version = null
+
+tags = {
+  environment = "prod"
+  owner       = "platform-team"
+  managedBy   = "terraform"
+}
