@@ -1,0 +1,102 @@
+name: Build And Deploy To AKS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  TF_VAR_prefix: loanapp
+  TF_VAR_location: eastus
+  TERRAFORM_WORKING_DIR: infra
+  K8S_WORKING_DIR: infra/k8s
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Terraform init
+        working-directory: ${{ env.TERRAFORM_WORKING_DIR }}
+        run: terraform init
+
+      - name: Terraform validate
+        working-directory: ${{ env.TERRAFORM_WORKING_DIR }}
+        run: terraform validate
+
+      - name: Terraform plan
+        working-directory: ${{ env.TERRAFORM_WORKING_DIR }}
+        run: terraform plan -out=tfplan
+
+      - name: Terraform apply
+        working-directory: ${{ env.TERRAFORM_WORKING_DIR }}
+        run: terraform apply -auto-approve tfplan
+
+      - name: Read Terraform outputs
+        id: tf
+        working-directory: ${{ env.TERRAFORM_WORKING_DIR }}
+        run: |
+          echo "resource_group=$(terraform output -raw resource_group_name)" >> "$GITHUB_OUTPUT"
+          echo "aks_name=$(terraform output -raw aks_cluster_name)" >> "$GITHUB_OUTPUT"
+          echo "acr_name=$(terraform output -raw acr_name)" >> "$GITHUB_OUTPUT"
+          echo "acr_login_server=$(terraform output -raw acr_login_server)" >> "$GITHUB_OUTPUT"
+
+      - name: ACR login
+        run: az acr login --name ${{ steps.tf.outputs.acr_name }}
+
+      - name: Build and push API image
+        run: |
+          docker build -f api/Dockerfile -t ${{ steps.tf.outputs.acr_login_server }}/loan-api:${IMAGE_TAG} .
+          docker push ${{ steps.tf.outputs.acr_login_server }}/loan-api:${IMAGE_TAG}
+
+      - name: Build and push UI image
+        run: |
+          docker build -f ui/Dockerfile -t ${{ steps.tf.outputs.acr_login_server }}/loan-ui:${IMAGE_TAG} .
+          docker push ${{ steps.tf.outputs.acr_login_server }}/loan-ui:${IMAGE_TAG}
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ steps.tf.outputs.resource_group }} \
+            --name ${{ steps.tf.outputs.aks_name }} \
+            --overwrite-existing
+
+      - name: Render manifests
+        run: |
+          mkdir -p rendered
+          sed "s|__API_IMAGE__|${{ steps.tf.outputs.acr_login_server }}/loan-api:${IMAGE_TAG}|g" ${{ env.K8S_WORKING_DIR }}/api-deployment.yaml > rendered/api-deployment.yaml
+          sed "s|__UI_IMAGE__|${{ steps.tf.outputs.acr_login_server }}/loan-ui:${IMAGE_TAG}|g" ${{ env.K8S_WORKING_DIR }}/ui-deployment.yaml > rendered/ui-deployment.yaml
+
+      - name: Deploy workloads
+        run: |
+          kubectl apply -f ${{ env.K8S_WORKING_DIR }}/namespace.yaml
+          kubectl apply -f ${{ env.K8S_WORKING_DIR }}/api-service.yaml
+          kubectl apply -f ${{ env.K8S_WORKING_DIR }}/ui-service.yaml
+          kubectl apply -f rendered/api-deployment.yaml
+          kubectl apply -f rendered/ui-deployment.yaml
+
+      - name: Verify rollout
+        run: |
+          kubectl rollout status deployment/loan-api -n loan-app --timeout=180s
+          kubectl rollout status deployment/loan-ui -n loan-app --timeout=180s
+          kubectl get svc -n loan-app
