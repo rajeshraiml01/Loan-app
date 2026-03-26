@@ -1,6 +1,7 @@
 fastapi
 joblib
 matplotlib
+seaborn
 mlflow
 numpy
 pandas
